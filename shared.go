@@ -1,10 +1,10 @@
 package promtail
 
+import "maps"
+
 func copyLabels(src map[string]string) map[string]string {
 	dst := make(map[string]string, len(src))
-	for i := range src {
-		dst[i] = src[i]
-	}
+	maps.Copy(dst, src)
 	return dst
 }
 

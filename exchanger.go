@@ -2,10 +2,11 @@ package promtail
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -18,9 +19,10 @@ type LogStream struct {
 }
 
 type LogEntry struct {
+	Labels    map[string]string
+	Level     Level
 	Timestamp time.Time
-	Format    string
-	Args      []interface{}
+	LogLine   []byte
 }
 
 const (
@@ -36,15 +38,15 @@ type BasicAuthExchanger interface {
 	SetBasicAuth(username, password string)
 }
 
-//
 // Creates a client with direct send logic (nor batch neither queue) capable to
 // exchange with Loki v1 API via JSON
-//	Read more at: https://github.com/grafana/loki/blob/master/docs/api.md#post-lokiapiv1push
 //
-func NewJSONv1Exchanger(lokiAddress string) StreamsExchanger {
+//	Read more at: https://github.com/grafana/loki/blob/master/docs/api.md#post-lokiapiv1push
+func NewJSONv1Exchanger(lokiAddress string, useGzipCompression bool) StreamsExchanger {
 	return &lokiJsonV1Exchanger{
-		restClient:  &http.Client{},
-		lokiAddress: lokiAddress,
+		restClient:         &http.Client{},
+		lokiAddress:        lokiAddress,
+		useGzipCompression: useGzipCompression,
 	}
 }
 
@@ -53,15 +55,17 @@ const (
 )
 
 type lokiJsonV1Exchanger struct {
-	restClient  *http.Client
-	lokiAddress string
-	username    string
-	password    string
+	restClient         *http.Client
+	useGzipCompression bool
+	lokiAddress        string
+	username           string
+	password           string
 }
 
+// Data transfer objects are restored from `push API` description:
 //
-//	Data transfer objects are restored from `push API` description:
-//		https://github.com/grafana/loki/blob/master/docs/api.md#post-lokiapiv1push
+//	https://github.com/grafana/loki/blob/master/docs/api.md#post-lokiapiv1push
+//
 //	{
 //		"streams": [
 //			{
@@ -75,7 +79,6 @@ type lokiJsonV1Exchanger struct {
 //			}
 //		]
 //	}
-//
 type (
 	lokiDTOJsonV1PushRequest struct {
 		Streams []*lokiDTOJsonV1Stream `json:"streams"`
@@ -88,21 +91,31 @@ type (
 )
 
 func (rcv *lokiJsonV1Exchanger) Push(streams []*LogStream) error {
-	var (
-		pushMessage       = rcv.transformLogStreamsToDTO(streams)
-		rawPushMessage, _ = json.Marshal(pushMessage)
-	)
+	var buf bytes.Buffer
+
+	var w io.Writer = &buf
+	if rcv.useGzipCompression {
+		gw := gzip.NewWriter(&buf)
+		defer gw.Close()
+		w = gw
+	}
+	if err := json.NewEncoder(w).Encode(rcv.transformLogStreamsToDTO(streams)); err != nil {
+		return fmt.Errorf("failed to encode push message: %s", err)
+	}
 
 	req, err := http.NewRequest(
-		"POST",
+		http.MethodPost,
 		rcv.lokiAddress+"/loki/api/v1/push",
-		bytes.NewBuffer(rawPushMessage),
+		&buf,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %s", err)
 	}
 
 	req.Header.Add("Content-Type", "application/json")
+	if rcv.useGzipCompression {
+		req.Header.Add("Content-Encoding", "gzip")
+	}
 
 	if rcv.username != "" && rcv.password != "" {
 		req.SetBasicAuth(rcv.username, rcv.password)
@@ -115,12 +128,11 @@ func (rcv *lokiJsonV1Exchanger) Push(streams []*LogStream) error {
 
 	defer func() { _ = resp.Body.Close() }()
 
-	if !(199 < resp.StatusCode && resp.StatusCode < 300) {
-		messageBody, _ := ioutil.ReadAll(resp.Body)
+	if !rcv.isSuccessHTTPCode(resp.StatusCode) {
+		messageBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("unexpected response code [code=%d], message: %s",
 			resp.StatusCode, string(messageBody))
 	}
-
 	return nil
 }
 
@@ -177,7 +189,7 @@ func (rcv *lokiJsonV1Exchanger) transformLogStreamsToDTO(streams []*LogStream) *
 
 			lokiStream.Values = append(lokiStream.Values, [2]string{
 				strconv.FormatInt(streams[i].Entries[j].Timestamp.UnixNano(), 10),
-				rcv.formatMessage(streams[i].Level, streams[i].Entries[j].Format, streams[i].Entries[j].Args...),
+				string(streams[i].Entries[j].LogLine),
 			})
 		}
 
@@ -190,10 +202,6 @@ func (rcv *lokiJsonV1Exchanger) transformLogStreamsToDTO(streams []*LogStream) *
 func (rcv *lokiJsonV1Exchanger) SetBasicAuth(username, password string) {
 	rcv.username = username
 	rcv.password = password
-}
-
-func (rcv *lokiJsonV1Exchanger) formatMessage(lvl Level, format string, args ...interface{}) string {
-	return lvl.String() + ": " + fmt.Sprintf(format, args...)
 }
 
 func (rcv *lokiJsonV1Exchanger) isSuccessHTTPCode(code int) bool {

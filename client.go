@@ -14,10 +14,9 @@ const (
 	exchangeQueueSize       = 1024
 )
 
-//
 // Creates a Promtail client with a custom Streams exchanger
-//	NOTE: options are applied before client start
 //
+//	NOTE: options are applied before client start
 func NewClient(exchanger StreamsExchanger, labels map[string]string, options ...clientOption) (Client, error) {
 	if exchanger == nil {
 		return nil, errors.New("exchanger is nil, no operations could be performed")
@@ -55,7 +54,7 @@ func NewJSONv1Client(lokiAddress string, defaultLabels map[string]string, option
 		lokiAddress = "http://" + lokiAddress
 	}
 
-	return NewClient(NewJSONv1Exchanger(lokiAddress), defaultLabels, options...)
+	return NewClient(NewJSONv1Exchanger(lokiAddress, true), defaultLabels, options...)
 }
 
 func WithSendBatchSize(batchSize uint) clientOption {
@@ -115,49 +114,17 @@ func (rcv *promtailClient) Ping() (*PongResponse, error) {
 	return rcv.exchanger.Ping()
 }
 
-func (rcv *promtailClient) Logf(level Level, format string, args ...interface{}) {
-	rcv.LogfWithLabels(level, nil, format, args...)
-}
-
-func (rcv *promtailClient) LogfWithLabels(level Level, labels map[string]string, format string, args ...interface{}) {
+func (rcv *promtailClient) PushLogEntry(entry *LogEntry) {
 	if rcv.isStopped { // Escape from endless lock
 		log.Println("promtail client is stopped, no log entries will be sent!")
 		return
 	}
 
 	rcv.queue <- packedLogEntry{
-		labels: copyLabels(labels),
-		level:  level,
-		logEntry: &LogEntry{
-			Timestamp: time.Now(),
-			Format:    format,
-			Args:      args,
-		},
+		labels:   copyLabels(entry.Labels),
+		level:    entry.Level,
+		logEntry: entry,
 	}
-}
-
-func (rcv *promtailClient) Debugf(format string, args ...interface{}) {
-	rcv.Logf(Debug, format, args...)
-}
-
-func (rcv *promtailClient) Infof(format string, args ...interface{}) {
-	rcv.Logf(Info, format, args...)
-}
-
-func (rcv *promtailClient) Warnf(format string, args ...interface{}) {
-	rcv.Logf(Warn, format, args...)
-}
-
-func (rcv *promtailClient) Errorf(format string, args ...interface{}) {
-	rcv.Logf(Error, format, args...)
-}
-
-func (rcv *promtailClient) Fatalf(format string, args ...interface{}) {
-	rcv.Logf(Fatal, format, args...)
-}
-
-func (rcv *promtailClient) Panicf(format string, args ...interface{}) {
-	rcv.Logf(Panic, format, args...)
 }
 
 func (rcv *promtailClient) Close() {

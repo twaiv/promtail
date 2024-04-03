@@ -1,3 +1,3 @@
-module github.com/ic2hrmk/promtail
+module github.com/twaiv/promtail
 
-go 1.14
+go 1.21
