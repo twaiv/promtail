@@ -33,6 +33,7 @@ func (l Level) String() string {
 type Client interface {
 	PushLogEntry(entry *LogEntry)
 	Ping() (*PongResponse, error)
+	Flush()
 	Close()
 }
 

@@ -37,6 +37,7 @@ func NewClient(exchanger StreamsExchanger, labels map[string]string, options ...
 
 		stopSignal:  make(chan struct{}),
 		stopAwaiter: make(chan struct{}),
+		flushSignal: make(chan struct{}),
 	}
 
 	for i := range options {
@@ -107,6 +108,7 @@ type promtailClient struct {
 	isStopped   bool
 	stopSignal  chan struct{}
 	stopAwaiter chan struct{}
+	flushSignal chan struct{}
 	stopOnce    sync.Once
 }
 
@@ -125,6 +127,14 @@ func (rcv *promtailClient) PushLogEntry(entry *LogEntry) {
 		level:    entry.Level,
 		logEntry: entry,
 	}
+}
+
+func (rcv *promtailClient) Flush() {
+	if rcv.isStopped {
+		log.Println("promtail client is stopped, no log entries will be sent!")
+		return
+	}
+	rcv.flushSignal <- struct{}{}
 }
 
 func (rcv *promtailClient) Close() {
@@ -165,6 +175,20 @@ exchangeLoop:
 				}
 			}
 
+		// On flush signal
+		case <-rcv.flushSignal:
+			{
+				if batch.countEntries() > 0 {
+					err = rcv.exchanger.Push(batch.getStreams())
+					if err != nil {
+						rcv.errorHandler(err)
+					}
+
+					batch.reset()
+				}
+
+				batchTimer.Reset(rcv.sendBatchTimeout)
+			}
 		// On send timeout
 		case <-batchTimer.C:
 			{

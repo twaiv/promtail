@@ -93,15 +93,18 @@ type (
 func (rcv *lokiJsonV1Exchanger) Push(streams []*LogStream) error {
 	var buf bytes.Buffer
 
-	var w io.Writer = &buf
-	if rcv.useGzipCompression {
-		gw := gzip.NewWriter(&buf)
-		defer gw.Close()
-		w = gw
-	}
-	if err := json.NewEncoder(w).Encode(rcv.transformLogStreamsToDTO(streams)); err != nil {
-		return fmt.Errorf("failed to encode push message: %s", err)
-	}
+	func() error {
+		var w io.Writer = &buf
+		if rcv.useGzipCompression {
+			gw := gzip.NewWriter(&buf)
+			defer gw.Close()
+			w = gw
+		}
+		if err := json.NewEncoder(w).Encode(rcv.transformLogStreamsToDTO(streams)); err != nil {
+			return fmt.Errorf("failed to encode streams message: %s", err)
+		}
+		return nil
+	}()
 
 	req, err := http.NewRequest(
 		http.MethodPost,
