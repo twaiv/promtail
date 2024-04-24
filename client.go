@@ -10,7 +10,7 @@ import (
 
 const (
 	defaultSendBatchSize    = 5
-	defaultSendBatchTimeout = 5 * time.Second
+	defaultSendBatchTimeout = 1 * time.Second
 	exchangeQueueSize       = 1024
 )
 

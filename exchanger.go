@@ -51,7 +51,7 @@ func NewJSONv1Exchanger(lokiAddress string, useGzipCompression bool) StreamsExch
 }
 
 const (
-	requestTimeout = 5 * time.Second
+	requestTimeout = defaultSendBatchTimeout
 )
 
 type lokiJsonV1Exchanger struct {
